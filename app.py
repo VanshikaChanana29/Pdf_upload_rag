@@ -16,6 +16,20 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 load_dotenv()
 
+# Resolve Mistral API Key (supporting Streamlit Secrets in cloud and .env locally)
+mistral_api_key = None
+try:
+    if "MISTRAL_API_KEY" in st.secrets:
+        mistral_api_key = str(st.secrets["MISTRAL_API_KEY"]).strip().strip('"').strip("'")
+except Exception:
+    pass
+
+if not mistral_api_key:
+    mistral_api_key = (os.getenv("MISTRAL_API_KEY") or "").strip().strip('"').strip("'")
+
+if mistral_api_key:
+    os.environ["MISTRAL_API_KEY"] = mistral_api_key
+
 st.set_page_config(
     page_title="RAG AI Assistant",
     page_icon="🧠",
@@ -160,7 +174,11 @@ class CustomDoc:
 
 @st.cache_resource
 def load_rag():
-    embedding_model = MistralAIEmbeddings()
+    current_api_key = os.getenv("MISTRAL_API_KEY", "").strip()
+    if not current_api_key:
+        raise ValueError("MISTRAL_API_KEY is missing! Please configure MISTRAL_API_KEY in Streamlit Secrets or environment variables.")
+
+    embedding_model = MistralAIEmbeddings(api_key=current_api_key)
 
     vectorstore = Chroma(
         persist_directory="chroma-db",
@@ -172,7 +190,7 @@ def load_rag():
         search_kwargs={"k": 4}
     )
 
-    llm = ChatMistralAI(model="mistral-small-2506")
+    llm = ChatMistralAI(api_key=current_api_key, model="mistral-small-2506")
 
     template = ChatPromptTemplate.from_messages([
         (
