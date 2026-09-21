@@ -1,4 +1,5 @@
 import os
+import time
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -171,6 +172,21 @@ class CustomDoc:
         self.metadata = metadata
 
 
+def call_with_retry(func, *args, max_retries=4, base_delay=2, **kwargs):
+    """Call a Mistral API function, retrying with exponential backoff on 429 rate limits."""
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            is_rate_limit = "429" in str(e) or "rate limit" in str(e).lower()
+            if is_rate_limit and attempt < max_retries - 1:
+                wait_time = base_delay * (2 ** attempt)
+                st.toast(f"Mistral rate limit hit, retrying in {wait_time}s...", icon="⏳")
+                time.sleep(wait_time)
+                continue
+            raise
+
+
 
 @st.cache_resource
 def load_rag():
@@ -304,7 +320,12 @@ with st.sidebar:
                             )
                             chunks = splitter.split_documents(docs)
                             if chunks:
-                                vectorstore.add_documents(chunks)
+                                batch_size = 10
+                                for i in range(0, len(chunks), batch_size):
+                                    batch = chunks[i:i + batch_size]
+                                    call_with_retry(vectorstore.add_documents, batch)
+                                    if i + batch_size < len(chunks):
+                                        time.sleep(1.5)
                                 total_chunks += len(chunks)
                                 processed_files.append(u_file.name)
 
@@ -496,12 +517,12 @@ if query:
                 if matched_docs:
                     docs = matched_docs[:4]
                 else:
-                    docs = retriever.invoke(query)
+                    docs = call_with_retry(retriever.invoke, query)
 
                 context = "\n\n".join([doc.page_content for doc in docs])
                 final_prompt = template.invoke({"context": context, "question": query})
 
-                response = llm.invoke(final_prompt)
+                response = call_with_retry(llm.invoke, final_prompt)
                 answer = response.content
 
                 st.markdown(answer)
